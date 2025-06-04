@@ -2,63 +2,73 @@ import streamlit as st
 import os
 import base64
 import time
-import nltk # Import NLTK early for path configuration
+import nltk
 
-# --- NLTK Data Path Configuration (Add this block near the top) ---
+# --- NLTK Data Path Configuration (MUST BE NEAR THE TOP) ---
 APP_ROOT_FOLDER_FOR_NLTK = os.path.dirname(os.path.abspath(__file__))
 NLTK_DATA_PATH = os.path.join(APP_ROOT_FOLDER_FOR_NLTK, 'nltk_data')
+
+# This print is for debugging deployment path issues for NLTK
+print(f"DEBUG: Attempting to use NLTK data path: {NLTK_DATA_PATH}")
+print(f"DEBUG: nltk.data.path before modification: {nltk.data.path}")
+
 if os.path.exists(NLTK_DATA_PATH):
     if NLTK_DATA_PATH not in nltk.data.path:
-        nltk.data.path.append(NLTK_DATA_PATH)
-        # print(f"DEBUG: Added custom NLTK data path: {NLTK_DATA_PATH}") # For debugging
+        nltk.data.path.insert(0, NLTK_DATA_PATH) # Insert at the beginning to prioritize
+        print(f"DEBUG: Added custom NLTK data path: {NLTK_DATA_PATH}")
 else:
-    # This print will show in Streamlit logs if the folder is missing
-    print(f"WARNING: Packaged NLTK data path not found: {NLTK_DATA_PATH}")
+    print(f"WARNING: Packaged NLTK data path not found: {NLTK_DATA_PATH}. NLTK functions might fail.")
+print(f"DEBUG: nltk.data.path after modification: {nltk.data.path}")
 # --- END NLTK Data Path Configuration ---
 
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize, sent_tokenize
 from collections import Counter
+import getpass # Keep for local API key input if needed, though secrets are preferred
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-# ... (rest of your LangChain imports)
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain.memory import ConversationBufferWindowMemory
 
-
 # ==============================================================================
-# CONFIGURATION (User needs to set these - REVERTED TO LUNG CANCER FOCUS)
+# CONFIGURATION
 # ==============================================================================
-# (Your existing configuration section - API_KEY, FOLDER_PATH, EMB_MODEL, etc.)
-# For Streamlit Cloud deployment, use st.secrets["GOOGLE_API_KEY"]
-# For local, set as env var or use the placeholder carefully for testing.
-GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", os.environ.get("GOOGLE_API_KEY"))
-if not GOOGLE_API_KEY:
-    GOOGLE_API_KEY = "YOUR_ACTUAL_GOOGLE_API_KEY_FOR_LOCAL_TESTING" # Placeholder
-    if GOOGLE_API_KEY == "YOUR_ACTUAL_GOOGLE_API_KEY_FOR_LOCAL_TESTING":
-        st.sidebar.warning("⚠️ API Key not found. Using placeholder. App may not function fully.")
+# Try to get API_KEY from Streamlit secrets first, then environment variable
+# This variable `API_KEY_CONFIG` is used to set os.environ["GOOGLE_API_KEY"]
+API_KEY_CONFIG = st.secrets.get("GOOGLE_API_KEY", os.environ.get("GOOGLE_API_KEY"))
 
-if GOOGLE_API_KEY and GOOGLE_API_KEY != "YOUR_ACTUAL_GOOGLE_API_KEY_FOR_LOCAL_TESTING":
-    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
-elif not os.getenv("GOOGLE_API_KEY") and GOOGLE_API_KEY == "YOUR_ACTUAL_GOOGLE_API_KEY_FOR_LOCAL_TESTING":
-     st.sidebar.error("Google API Key is not properly configured.")
-     # st.stop() # Consider stopping if essential
+if not API_KEY_CONFIG:
+    # This is a fallback for local development if secrets/env var are not set.
+    # In production on Streamlit Cloud, API_KEY_CONFIG should come from st.secrets.
+    print("WARNING: GOOGLE_API_KEY not found in Streamlit secrets or environment variables.")
+    # For local testing, you might uncomment the getpass line or hardcode temporarily.
+    # API_KEY_CONFIG = getpass.getpass("Enter your Google API key for local testing: ")
+    API_KEY_CONFIG = "YOUR_FALLBACK_API_KEY_FOR_LOCAL_TESTING_ONLY" # Replace or remove for deployment
+    if API_KEY_CONFIG == "YOUR_FALLBACK_API_KEY_FOR_LOCAL_TESTING_ONLY":
+        st.sidebar.warning("⚠️ API Key not set via secrets/env. Using placeholder. App may not function.")
+
+# Set the environment variable for LangChain libraries to pick up
+if API_KEY_CONFIG and API_KEY_CONFIG != "YOUR_FALLBACK_API_KEY_FOR_LOCAL_TESTING_ONLY":
+    os.environ["GOOGLE_API_KEY"] = API_KEY_CONFIG
+elif not os.getenv("GOOGLE_API_KEY") and API_KEY_CONFIG == "YOUR_FALLBACK_API_KEY_FOR_LOCAL_TESTING_ONLY":
+    # This case means no proper key was found.
+    # The app will likely fail when initializing LLMs if this placeholder is used.
+    pass
+
 
 # FOLDER_PATH should point to where the FAISS index SUBFOLDER is located
-# If FAISS index is in the root with app.py, FOLDER_PATH can be APP_ROOT_FOLDER_FOR_NLTK
-# Or if FAISS index is in a specific data subfolder:
-# FOLDER_PATH = os.path.join(APP_ROOT_FOLDER_FOR_NLTK, "data_containing_faiss_subfolder")
-FOLDER_PATH = APP_ROOT_FOLDER_FOR_NLTK # Assuming FAISS subfolder is in the app root
+# If FAISS index subfolder is in the app root:
+FOLDER_PATH = APP_ROOT_FOLDER_FOR_NLTK # Assumes FAISS subfolder is in the app root
 
 EMB_MODEL = "models/embedding-001"
-RAG_LLM_MODEL_NAME = "gemini-pro"
-INTENT_LLM_MODEL_NAME = "gemini-pro"
+RAG_LLM_MODEL_NAME = "gemini-pro" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
+INTENT_LLM_MODEL_NAME = "gemini-pro" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
 
 FAISS_INDEX_NAME = "my_faiss_index_artifact" # Your FAISS subfolder name
-FAISS_INDEX_PATH = os.path.join(FOLDER_PATH, FAISS_INDEX_NAME) # Path to the FAISS subfolder
+FAISS_INDEX_PATH = os.path.join(FOLDER_PATH, FAISS_INDEX_NAME)
 
 EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
 HYBRID_TOP_N_SEMANTIC = 25
@@ -66,30 +76,26 @@ HYBRID_TOP_N_FOR_LLM = 5
 HYBRID_KEYWORD_BOOST_FACTOR = 0.05
 HYBRID_NO_KEYWORD_MATCH_PENALTY = 0.1
 CONVERSATION_WINDOW_K = 5
-BACKGROUND_IMAGE_FILENAME = "hospital.png" # Your background image
+BACKGROUND_IMAGE_FILENAME = "hospital.png"
 # ==============================================================================
 
 
 # --- Helper Functions ---
 @st.cache_data
-def get_base64_of_bin_file(bin_file):
-    # ... (same as before)
+def get_base64_of_bin_file(bin_file_path): # Takes full path
     try:
-        with open(bin_file, 'rb') as f: data = f.read()
+        with open(bin_file_path, 'rb') as f: data = f.read()
         return base64.b64encode(data).decode()
     except FileNotFoundError: return None
 
 def load_custom_css():
-    # ... (same as before, using BACKGROUND_IMAGE_FILENAME)
-    image_filename = BACKGROUND_IMAGE_FILENAME
-    img_path = os.path.join(APP_ROOT_FOLDER_FOR_NLTK, image_filename) # Assuming image is in app root
-    img_base64 = get_base64_of_bin_file(img_path)
+    image_path_for_css = os.path.join(APP_ROOT_FOLDER_FOR_NLTK, BACKGROUND_IMAGE_FILENAME)
+    img_base64 = get_base64_of_bin_file(image_path_for_css)
     if img_base64:
         background_css = f"background-image: url('data:image/png;base64,{img_base64}');"
     else:
-        st.sidebar.warning(f"BG image '{image_filename}' not found. Using default BG.")
+        st.sidebar.warning(f"BG image '{BACKGROUND_IMAGE_FILENAME}' not found at '{image_path_for_css}'. Using default BG.")
         background_css = "background-color: #0a0b0c;"
-    # (The rest of your custom_css string)
     custom_css = f"""
     <style>
         .stApp {{ {background_css} background-size: cover; background-repeat: no-repeat; background-attachment: fixed; }}
@@ -108,10 +114,11 @@ def load_custom_css():
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
-
-@st.cache_data # Cache this check
-def download_nltk_resources_if_needed(): # MODIFIED - Now primarily a check
-    """Checks for NLTK resources, assuming they are packaged."""
+@st.cache_data
+def verify_nltk_resources(): # Renamed from download_nltk_resources_if_needed
+    """Verifies NLTK resources, assuming they are packaged."""
+    # This function now primarily serves to check if NLTK can find its data.
+    # The actual download should happen locally and files be part of the deployment.
     resources_to_check = {
         'tokenizers/punkt': 'punkt',
         'corpora/stopwords': 'stopwords',
@@ -120,35 +127,31 @@ def download_nltk_resources_if_needed(): # MODIFIED - Now primarily a check
     all_found = True
     for resource_path, resource_name in resources_to_check.items():
         try:
-            nltk.data.find(resource_path) # Will use nltk.data.path which includes our custom path
+            nltk.data.find(resource_path) # Will use nltk.data.path
         except LookupError:
-            st.error(f"Packaged NLTK resource missing: '{resource_name}' (expected at '{resource_path}' within nltk_data). "
-                     "Please ensure the 'nltk_data' folder is correctly deployed with the app.")
+            st.error(f"Packaged NLTK resource missing: '{resource_name}'. Ensure 'nltk_data' folder is deployed correctly.")
             all_found = False
-    
     if not all_found:
-        st.warning("Some essential NLTK data packages are missing. Keyword extraction and intent classification might not work correctly.")
-    # No download attempt here; relies on packaged data.
+        st.warning("Essential NLTK data packages missing. App functionality may be impaired.")
+    return all_found
 
-# (pos_tag_keyword_extractor, load_faiss_artifact_cached, hybrid_search_with_reranking_st,
-# format_docs_with_sources_st, get_llm, classify_intent_with_llm_st functions remain the same
-# as in your last fully working version, just ensure they use the globally defined constants)
 
-# --- Make sure all your other functions are defined here ---
-# For example:
 def pos_tag_keyword_extractor(text: str, num_keywords=0, target_pos_tags={'NN', 'NNS', 'NNP', 'NNPS', 'JJ', 'JJR', 'JJS'}) -> set:
-    # (Your working pos_tag_keyword_extractor function)
     if not text: return set()
     words_from_text = []
     try:
         for sentence in nltk.sent_tokenize(text): words_from_text.extend(nltk.word_tokenize(sentence))
-    except LookupError: words_from_text.extend(nltk.word_tokenize(text))
+    except LookupError: # This might happen if punkt is still not found despite checks
+        st.warning("NLTK 'punkt' tokenizer data not found. Keyword extraction may be basic.")
+        words_from_text.extend(nltk.word_tokenize(text)) # Fallback
     try:
         stop_words_set = set(stopwords.words('english'))
         meaningful_words = [w.lower() for w in words_from_text if w.isalnum() and w.lower() not in stop_words_set and len(w) > 2]
         if not meaningful_words: return set()
         tagged_meaningful_words = nltk.pos_tag(meaningful_words)
-    except LookupError: return set(meaningful_words[:num_keywords]) if num_keywords > 0 and meaningful_words else set(meaningful_words)
+    except LookupError: # If stopwords or tagger data is missing
+        st.warning("NLTK 'stopwords' or 'averaged_perceptron_tagger' data not found. Keyword extraction may be incomplete.")
+        return set(meaningful_words[:num_keywords]) if num_keywords > 0 and meaningful_words else set(meaningful_words)
     extracted_keywords_list = [word for word, tag in tagged_meaningful_words if tag in target_pos_tags]
     if num_keywords > 0 and extracted_keywords_list:
         return set(word for word, count in Counter(extracted_keywords_list).most_common(num_keywords))
@@ -156,14 +159,13 @@ def pos_tag_keyword_extractor(text: str, num_keywords=0, target_pos_tags={'NN', 
 
 @st.cache_resource
 def load_faiss_artifact_cached(allow_dangerous_deserialization=True) -> FAISS | None:
-    # (Your working load_faiss_artifact function, adapted for Streamlit caching)
-    if not os.path.exists(FAISS_INDEX_PATH):
-        st.error(f"FAISS artifact not found at {FAISS_INDEX_PATH}.")
+    faiss_file = os.path.join(FAISS_INDEX_PATH, "index.faiss") # FAISS_INDEX_PATH is the folder
+    pkl_file = os.path.join(FAISS_INDEX_PATH, "index.pkl")
+    if not (os.path.exists(faiss_file) and os.path.exists(pkl_file)):
+        st.error(f"FAISS index files ('index.faiss', 'index.pkl') not found in {FAISS_INDEX_PATH}.")
         return None
     try:
-        if not os.getenv("GOOGLE_API_KEY"):
-             st.error("GOOGLE_API_KEY not available for embedding model.")
-             return None
+        # The API key for embeddings is taken from the environment variable set at the start
         query_embeddings_model = GoogleGenerativeAIEmbeddings(model=EMB_MODEL, task_type=EMBEDDING_TASK_TYPE_QUERY)
         index = FAISS.load_local(FAISS_INDEX_PATH, query_embeddings_model, allow_dangerous_deserialization=allow_dangerous_deserialization)
         return index
@@ -174,7 +176,7 @@ def hybrid_search_with_reranking_st(
     top_n_semantic: int = HYBRID_TOP_N_SEMANTIC, top_n_final_for_llm: int = HYBRID_TOP_N_FOR_LLM,
     keyword_boost_factor: float = HYBRID_KEYWORD_BOOST_FACTOR, no_match_penalty: float = HYBRID_NO_KEYWORD_MATCH_PENALTY
 ) -> list[Document]:
-    # (Your working hybrid_search_with_reranking function)
+    # (Your working hybrid_search_with_reranking function - no changes needed here)
     if not faiss_index: return []
     try:
         semantic_results_with_scores = faiss_index.similarity_search_with_score(query_text, k=top_n_semantic)
@@ -193,8 +195,9 @@ def hybrid_search_with_reranking_st(
     reranked_candidates.sort(key=lambda x: x["combined_score"])
     return [cand["document"] for cand in reranked_candidates[:top_n_final_for_llm]]
 
+
 def format_docs_with_sources_st(docs: list[Document]) -> str:
-    # (Your working format_docs_with_sources function)
+    # (Your working format_docs_with_sources function - no changes needed here)
     formatted_docs = []
     for i, doc in enumerate(docs):
         source = doc.metadata.get('source', 'N/A'); page = doc.metadata.get('page', 'N/A')
@@ -205,18 +208,17 @@ def format_docs_with_sources_st(docs: list[Document]) -> str:
 
 INTENT_LABELS = ["GREETING_SMALLTALK", "LUNG_CANCER_QUERY", "OUT_OF_SCOPE", "EXIT"]
 @st.cache_resource
-def get_llm(_model_name, temperature, _api_key):
-    # (Your working get_llm function)
+def get_llm(_model_name, temperature): # Removed _api_key, relies on os.environ
     try:
-        if not _api_key:
+        if not os.getenv("GOOGLE_API_KEY"): # Check if API key is set in environment
              st.error(f"GOOGLE_API_KEY not available for LLM ({_model_name}).")
              return None
-        llm = ChatGoogleGenerativeAI(model=_model_name, temperature=temperature, convert_system_message_to_human=True, google_api_key=_api_key)
+        llm = ChatGoogleGenerativeAI(model=_model_name, temperature=temperature, convert_system_message_to_human=True)
         return llm
     except Exception as e: st.error(f"Error initializing LLM ({_model_name}): {e}"); return None
 
 def classify_intent_with_llm_st(user_query: str, _intent_llm: ChatGoogleGenerativeAI) -> str:
-    # (Your working classify_intent_with_llm function)
+    # (Your working classify_intent_with_llm function - no changes needed here)
     if not _intent_llm: return "LUNG_CANCER_QUERY"
     prompt_template = f"""Your task is to classify the user's intent based on their input.
 Please respond with ONLY one of the following labels: {', '.join(INTENT_LABELS)}
@@ -227,25 +229,25 @@ Classification:"""
     try:
         classification = chain.invoke({"user_query": user_query}).strip().upper()
         if classification in INTENT_LABELS: return classification
-        else: return "LUNG_CANCER_QUERY"
-    except Exception as e: return "LUNG_CANCER_QUERY"
+        else: return "LUNG_CANCER_QUERY" # Default if classification is unexpected
+    except Exception as e: st.warning(f"Intent classification error: {e}"); return "LUNG_CANCER_QUERY"
 
 
 # --- Streamlit App UI and Logic ---
 st.set_page_config(page_title="Lung Cancer AI Assistant", layout="wide", initial_sidebar_state="collapsed")
 load_custom_css()
 
-# Custom Title - REVERTED TO LUNG CANCER THEME
 st.markdown("<div class='custom-title-container'><div class='custom-title'><h1>Lung Cancer AI Assistant</h1></div></div>", unsafe_allow_html=True)
 
-# Initialize NLTK (cached)
-download_nltk_resources_if_needed() # This will now primarily check
+# Verify NLTK resources (now primarily checks if packaged data is found)
+nltk_ready = verify_nltk_resources() # Store the result of verification
 
 # Load FAISS index and LLMs
-current_api_key = os.getenv("GOOGLE_API_KEY") # Get the key that was set at the top
+# These are cached, so they only run once per session if inputs don't change.
+# The API key is now expected to be in os.environ from the top of the script.
 faiss_index = load_faiss_artifact_cached()
-rag_llm = get_llm(RAG_LLM_MODEL_NAME, temperature=0.3, _api_key=current_api_key)
-intent_llm = get_llm(INTENT_LLM_MODEL_NAME, temperature=0.1, _api_key=current_api_key)
+rag_llm = get_llm(RAG_LLM_MODEL_NAME, temperature=0.3)
+intent_llm = get_llm(INTENT_LLM_MODEL_NAME, temperature=0.1)
 
 # Initialize chat history and memory
 if "messages" not in st.session_state:
@@ -275,7 +277,7 @@ for message in st.session_state.messages:
                 for i, src_info in enumerate(sources_to_render):
                      st.markdown(f"**Source {i+1}:** File: {src_info['file']}, Page: {src_info['page']}")
 
-if st.button("Start New Session", key="start_new_session_main"): # Added a key
+if st.button("Start New Session", key="start_new_session_main"):
     st.session_state.messages = [
          {"role": "assistant", "content": "Hello! I am your AI assistant for lung cancer information. How can I help you today?"}
     ]
@@ -283,13 +285,19 @@ if st.button("Start New Session", key="start_new_session_main"): # Added a key
     st.rerun()
 
 if user_query := st.chat_input("Ask a question about lung cancer..."):
-    if not current_api_key or (API_KEY == "YOUR_ACTUAL_GOOGLE_API_KEY_FOR_LOCAL_TESTING" and not GOOGLE_API_KEY_FROM_SECRETS): # Check current_api_key
-        st.error("Google API Key is not properly configured.")
+    # --- CORRECTED API KEY AND COMPONENT CHECK ---
+    # Check if the API key was effectively set for LangChain to use
+    effective_api_key = os.getenv("GOOGLE_API_KEY")
+    if not effective_api_key or effective_api_key == "YOUR_FALLBACK_API_KEY_FOR_LOCAL_TESTING_ONLY":
+        st.error("Google API Key is not properly configured. Please set it via Streamlit secrets or environment variables.")
     elif not faiss_index or not rag_llm or not intent_llm:
-        st.error("A critical component (FAISS index or LLM) failed to load.")
+        st.error("A critical component (FAISS index or LLM) failed to load. Cannot proceed. Check logs during startup.")
+    elif not nltk_ready: # Check if NLTK resources are okay
+        st.error("Essential NLTK data is missing. Please ensure the 'nltk_data' folder is correctly deployed.")
     else:
         st.session_state.messages.append({"role": "user", "content": user_query})
         with st.chat_message("user", avatar="🧑‍💻"): st.markdown(user_query)
+        
         ai_response_text = ""; ai_response_sources = []
         intent = classify_intent_with_llm_st(user_query, intent_llm)
 
