@@ -20,8 +20,7 @@ from langchain.memory import ConversationBufferWindowMemory
 # For Streamlit Cloud deployment, use st.secrets["GOOGLE_API_KEY"]
 # For local, set as env var or use the placeholder carefully for testing.
 
-API_KEY = "AIzaSyBvD0GfkBOcms4j1pwZzDCYdxaVM5Wg01s"
-FOLDER_PATH = r"C:\Users\Maverick\Downloads\LC"
+API_KEY = st.secrets['GOOGLE_API_KEY']
 EMB_MODEL = "models/embedding-001"
 os.environ["GOOGLE_API_KEY"] = API_KEY
 
