@@ -1,6 +1,8 @@
 🌟 App Name: LungGuardian  
 
-"Your Trusted Companion in Lung Cancer Information"    
+"Your Trusted Companion in Lung Cancer Information" 
+
+   
 📄 Overview 
 
 LungGuardian  is an AI-powered assistant designed to provide accurate, evidence-based information about lung cancer. Built with Streamlit , LangChain , and Google Gemini , it leverages a knowledge base of medical documents to answer user queries with supporting sources.   
