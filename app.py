@@ -18,38 +18,36 @@ from langchain.memory import ConversationBufferWindowMemory
 # CONFIGURATION (User needs to set these - REVERTED TO LUNG CANCER FOCUS)
 # ==============================================================================
 # For Streamlit Cloud deployment, use st.secrets["GOOGLE_API_KEY"]
-# For local, set as env var or use the placeholder carefully for testing.
-
 API_KEY = st.secrets["GOOGLE_API_KEY"]
 os.environ["GOOGLE_API_KEY"] = API_KEY  # ensures LangChain/Google client picks up the key
 
 FOLDER_PATH = r"C:\Users\Maverick\Downloads\LC"  # (unused if deploying on Cloud, but left here for reference)
 EMB_MODEL = "models/embedding-001"
 
-# Keep the same Gemini‐style identifiers you used locally,
-# so long as AI Studio confirms “gemini-2.5-flash-preview-05-20” is enabled for your project.
+# These Gemini model strings must match exactly what you see in AI Studio → Models.
+# If “gemini-2.5-flash-preview-05-20” is enabled in your GCP project, use it here.
 RAG_LLM_MODEL_NAME    = "gemini-2.5-flash-preview-05-20"
 INTENT_LLM_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
 
-# Get the directory where the streamlit_app.py script is located
+# Get the directory where this script lives
 APP_ROOT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 
-FAISS_INDEX_NAME = "my_faiss_index_artifact"  # The name of your FAISS subfolder
+FAISS_INDEX_NAME = "my_faiss_index_artifact"  # Your FAISS subfolder name
 FAISS_INDEX_PATH = os.path.join(APP_ROOT_FOLDER, FAISS_INDEX_NAME)
 
 EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
 
-HYBRID_TOP_N_SEMANTIC       = 25
-HYBRID_TOP_N_FOR_LLM        = 5    # Number of chunks for LLM context
-HYBRID_KEYWORD_BOOST_FACTOR = 0.05
+HYBRID_TOP_N_SEMANTIC         = 25
+HYBRID_TOP_N_FOR_LLM          = 5     # Number of chunks for LLM context
+HYBRID_KEYWORD_BOOST_FACTOR   = 0.05
 HYBRID_NO_KEYWORD_MATCH_PENALTY = 0.1
-CONVERSATION_WINDOW_K       = 5
+CONVERSATION_WINDOW_K         = 5
 
 BACKGROUND_IMAGE_FILENAME = "hospital.png"
 # ==============================================================================
 
 
-# --- Function to load local image as base64 ---
+# --- Function to load a local image as base64 (for background) ---
 @st.cache_data
 def get_base64_of_bin_file(bin_file):
     try:
@@ -60,9 +58,8 @@ def get_base64_of_bin_file(bin_file):
         return None
 
 
-# --- Function to set custom CSS (Matches screenshot aesthetic) ---
-# --- Function to load local image as base64 ---
-@st.cache_data  # Cache the image data
+# --- Function to set custom CSS (dark, glowing theme) ---
+@st.cache_data
 def get_base64_of_bin_file(bin_file):
     try:
         with open(bin_file, 'rb') as f:
@@ -72,9 +69,8 @@ def get_base64_of_bin_file(bin_file):
         return None
 
 
-# --- Function to set custom CSS ---
 def load_custom_css():
-    image_filename = BACKGROUND_IMAGE_FILENAME  # Must be in the same folder as this script
+    image_filename = BACKGROUND_IMAGE_FILENAME
     img_path = os.path.join(APP_ROOT_FOLDER, image_filename)
     img_base64 = get_base64_of_bin_file(img_path)
 
@@ -162,7 +158,7 @@ def load_custom_css():
     st.markdown(custom_css, unsafe_allow_html=True)
 
 
-# --- Ensure NLTK resources (punkt, stopwords, tagger) are present or downloaded ---
+# --- Ensure NLTK resources (punkt, stopwords, aver_perceptron_tagger) are fetched if possible ---
 @st.cache_data
 def download_nltk_resources_if_needed():
     resources_to_check = {
@@ -182,10 +178,10 @@ def download_nltk_resources_if_needed():
             try:
                 nltk.download(resource_name_to_download, quiet=True)
             except Exception:
-                pass  # If download fails (no internet), we’ll fallback later
+                pass  # If no internet, we’ll fallback in the extractor
 
 
-# Call the downloader right away, before any tokenization attempts
+# Call this immediately before any tokenization happens
 download_nltk_resources_if_needed()
 
 
@@ -195,8 +191,9 @@ def pos_tag_keyword_extractor(
     target_pos_tags: set[str] = {'NN', 'NNS', 'NNP', 'NNPS', 'JJ', 'JJR', 'JJS'}
 ) -> set[str]:
     """
-    Tokenize text into words, remove stopwords, POS‐tag, and return top `num_keywords`.
-    If NLTK’s punkt isn’t available, fallback to simple .split() to avoid errors.
+    1) Tokenize text with `sent_tokenize` + `word_tokenize`.
+    2) If punkt is missing, fallback to `text.split()`.
+    3) Remove stopwords, POS‐tag, and return top `num_keywords`.
     """
     if not text:
         return set()
@@ -206,7 +203,7 @@ def pos_tag_keyword_extractor(
         for sentence in nltk.sent_tokenize(text):
             words_from_text.extend(nltk.word_tokenize(sentence))
     except LookupError:
-        # punkt is missing → fallback to whitespace split
+        # punkt not available → simple whitespace split
         words_from_text.extend(text.split())
 
     try:
@@ -220,8 +217,8 @@ def pos_tag_keyword_extractor(
             return set()
         tagged_meaningful_words = nltk.pos_tag(meaningful_words)
     except LookupError:
-        # stopwords or tagger missing → return as many meaningful words as requested
-        if num_keywords > 0 and words_from_text:
+        # stopwords or tagger missing → return whatever meaningful_words we got
+        if num_keywords > 0 and meaningful_words:
             return set(meaningful_words[:num_keywords])
         return set(meaningful_words)
 
@@ -238,7 +235,9 @@ def pos_tag_keyword_extractor(
 @st.cache_resource
 def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> FAISS | None:
     """
-    Loads the local FAISS index from FAISS_INDEX_PATH. Returns a FAISS vectorstore or None on failure.
+    1) Verify that index.faiss + index.pkl exist in FAISS_INDEX_PATH.
+    2) Initialize GoogleGenerativeAIEmbeddings (using os.getenv("GOOGLE_API_KEY")).
+    3) Load the FAISS index. Return None if anything fails.
     """
     faiss_file = os.path.join(FAISS_INDEX_PATH, "index.faiss")
     pkl_file   = os.path.join(FAISS_INDEX_PATH, "index.pkl")
@@ -275,10 +274,10 @@ def hybrid_search_with_reranking_st(
     no_match_penalty: float = HYBRID_NO_KEYWORD_MATCH_PENALTY
 ) -> list[Document]:
     """
-    1) Perform a semantic similarity search (top_n_semantic).
-    2) Extract keywords from the query (POS tagging).
-    3) Rerank semantic hits by keyword overlap + small penalty.
-    4) Return top_n_final_for_llm documents.
+    1) Do similarity_search_with_score(k=top_n_semantic).
+    2) Extract keywords from query.
+    3) Rerank by semantic_score ± keyword overlap penalty/boost.
+    4) Return top_n_final_for_llm Document objects.
     """
     if not faiss_index:
         return []
@@ -305,7 +304,9 @@ def hybrid_search_with_reranking_st(
             combined_score -= (keyword_match_count * keyword_boost_factor)
         else:
             combined_score += no_match_penalty
-        reranked_candidates.append({"document": doc, "combined_score": combined_score})
+        reranked_candidates.append(
+            {"document": doc, "combined_score": combined_score}
+        )
 
     reranked_candidates.sort(key=lambda x: x["combined_score"])
     return [cand["document"] for cand in reranked_candidates[:top_n_final_for_llm]]
@@ -313,8 +314,8 @@ def hybrid_search_with_reranking_st(
 
 def format_docs_with_sources_st(docs: list[Document]) -> str:
     """
-    Format a list of LangChain Document objects into a single string of:
-      Source 1 (File: filename, Page: page): <doc content>
+    Given a list of Document, create a single string:
+      Source 1 (File: filename, Page: page_number): <doc content>
       Source 2 (…)
     """
     formatted_docs = []
@@ -337,14 +338,14 @@ INTENT_LABELS = ["GREETING_SMALLTALK", "LUNG_CANCER_QUERY", "OUT_OF_SCOPE", "EXI
 
 @st.cache_resource
 def get_llm(
-    model_name: str       = RAG_LLM_MODEL_NAME,
-    temperature: float    = 0.3,
-    google_api_key: str   = None
+    model_name: str     = RAG_LLM_MODEL_NAME,
+    temperature: float  = 0.3,
+    google_api_key: str = None
 ) -> ChatGoogleGenerativeAI | None:
     """
     Returns a cached ChatGoogleGenerativeAI instance.
-    By default, this uses RAG_LLM_MODEL_NAME @ temperature=0.3.
-    To get the intent‐classifier, call get_llm(model_name=INTENT_LLM_MODEL_NAME, temperature=0.1).
+    By default, uses RAG_LLM_MODEL_NAME @ temperature=0.3.
+    For intent classification, override model_name=INTENT_LLM_MODEL_NAME, temperature=0.1.
     """
     if google_api_key is None:
         google_api_key = os.getenv("GOOGLE_API_KEY")
@@ -354,9 +355,12 @@ def get_llm(
         return None
 
     try:
-        # IMPORTANT: use `model_name=` (not `model=`)
+        # ───────────
+        # THIS IS THE ONE CHANGE:
+        # Use `model=…` instead of `model_name=…`
+        # ───────────
         llm = ChatGoogleGenerativeAI(
-            model_name=model_name,
+            model=model_name,
             temperature=temperature,
             convert_system_message_to_human=True,
             google_api_key=google_api_key
@@ -372,9 +376,9 @@ def classify_intent_with_llm_st(
     _intent_llm: ChatGoogleGenerativeAI
 ) -> str:
     """
-    1) Build a simple classification prompt with INTENT_LABELS.
-    2) Run it through the intent LLM to get one label.
-    3) If anything goes wrong, default to LUNG_CANCER_QUERY.
+    1) Create a classification prompt with INTENT_LABELS.
+    2) Invoke the intent LLM.
+    3) Return one of the labels, or default to "LUNG_CANCER_QUERY" if something goes wrong.
     """
     if not _intent_llm:
         return "LUNG_CANCER_QUERY"
@@ -403,10 +407,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Apply custom CSS (dark, glowing theme)
+# Apply your custom CSS (dark + cyan glow theme)
 load_custom_css()
 
-# Custom Title – LUNG CANCER AI ASSISTANT
+# Custom Title – “Lung Cancer AI Assistant”
 st.markdown(
     "<div class='custom-title-container'><div class='custom-title'>"
     "<h1>Lung Cancer AI Assistant</h1>"
@@ -459,7 +463,7 @@ for message in st.session_state.messages:
                         f"**Source {i+1}:** File: {src_info['file']}, Page: {src_info['page']}"
                     )
 
-# "Start New Session" button
+# “Start New Session” button
 if st.button("Start New Session", key="start_new_session_main"):
     st.session_state.messages = [
         {
@@ -473,14 +477,12 @@ if st.button("Start New Session", key="start_new_session_main"):
 
 # Main chat input loop
 if user_query := st.chat_input("Ask a question about lung cancer..."):
-    # Check that API key, FAISS index, and LLMs are available
     effective_api_key = os.getenv("GOOGLE_API_KEY")
     if not effective_api_key:
         st.error("Google API Key is not properly configured. Please set it via Streamlit secrets.")
     elif not faiss_index or not rag_llm or not intent_llm:
         st.error("A critical component (FAISS index or LLM) failed to load. Cannot proceed.")
     else:
-        # Append user message to session and display it
         st.session_state.messages.append({"role": "user", "content": user_query})
         with st.chat_message("user", avatar="🧑‍💻"):
             st.markdown(user_query)
@@ -488,7 +490,7 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
         ai_response_text: str = ""
         ai_response_sources: list[dict[str, str | int]] = []
 
-        # 1) Classify the intent
+        # 1) Classify intent
         intent = classify_intent_with_llm_st(user_query, intent_llm)
 
         if intent == "GREETING_SMALLTALK":
@@ -497,14 +499,13 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
 
         elif intent == "EXIT":
             ai_response_text = "Thank you for using the Lung Cancer AI Assistant. Goodbye!"
-            # We do not save EXIT in memory; we will stop after sending
 
         elif intent == "OUT_OF_SCOPE":
             ai_response_text = "Sorry, I can only provide information related to lung cancer."
             st.session_state.chat_memory.save_context({"question": user_query}, {"answer": ai_response_text})
 
         elif intent == "LUNG_CANCER_QUERY":
-            # RAG path
+            # RAG‐style path
             with st.spinner("Searching my knowledge base and formulating a response..."):
                 retrieved_docs_for_llm = hybrid_search_with_reranking_st(user_query, faiss_index)
 
@@ -557,7 +558,7 @@ Answer:"""
                             "chat_history_str": current_chat_history_str
                         })
 
-                        # Collect source information for display
+                        # Collect source info for display
                         for doc in retrieved_docs_for_llm:
                             source_file = os.path.basename(doc.metadata.get("source", "N/A"))
                             page_num    = doc.metadata.get("page", "N/A")
@@ -577,14 +578,14 @@ Answer:"""
                 )
 
         else:
-            # Fallback for any other labels
+            # Fallback for unexpected intents
             ai_response_text = "I'm not sure how to handle that. Could you rephrase?"
             st.session_state.chat_memory.save_context(
                 {"question": user_query},
                 {"answer": ai_response_text}
             )
 
-        # Add the AI response (and any sources) to session and display
+        # Add AI response (and its sources) to session and display
         st.session_state.messages.append({
             "role": "assistant",
             "content": ai_response_text,
