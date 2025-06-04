@@ -64,8 +64,8 @@ elif not os.getenv("GOOGLE_API_KEY") and API_KEY_CONFIG == "YOUR_FALLBACK_API_KE
 FOLDER_PATH = APP_ROOT_FOLDER_FOR_NLTK # Assumes FAISS subfolder is in the app root
 
 EMB_MODEL = "models/embedding-001"
-RAG_LLM_MODEL_NAME = "gemini-pro" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
-INTENT_LLM_MODEL_NAME = "gemini-pro" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
+RAG_LLM_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
+INTENT_LLM_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Example: "gemini-1.5-flash-latest" or "gemini-pro"
 
 FAISS_INDEX_NAME = "my_faiss_index_artifact" # Your FAISS subfolder name
 FAISS_INDEX_PATH = os.path.join(FOLDER_PATH, FAISS_INDEX_NAME)
