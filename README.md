@@ -23,10 +23,6 @@ LungGuardian  is an AI-powered assistant designed to provide accurate, evidence-
             page: Page number (if applicable).  
             keywords: Extracted via NLTK POS tagging  (nouns, adjectives, etc.) for hybrid search 
 
-            .
-             
-         
-     
 
 2. Embedding Generation & FAISS Storage  
 
@@ -35,10 +31,6 @@ LungGuardian  is an AI-powered assistant designed to provide accurate, evidence-
          
     Vector Database :  
         Embeddings and metadata are stored in a FAISS index  (index.faiss + index.pkl) for fast semantic search 
-
-        .
-         
-     
 
 3. Hybrid Search Pipeline  
 
