@@ -58,17 +58,6 @@ def get_base64_of_bin_file(bin_file):
         return None
 
 
-# --- Function to set custom CSS (dark, glowing theme) ---
-@st.cache_data
-def get_base64_of_bin_file(bin_file):
-    try:
-        with open(bin_file, 'rb') as f:
-            data = f.read()
-        return base64.b64encode(data).decode()
-    except FileNotFoundError:
-        return None
-
-
 def load_custom_css():
     image_filename = BACKGROUND_IMAGE_FILENAME
     img_path = os.path.join(APP_ROOT_FOLDER, image_filename)
@@ -82,31 +71,36 @@ def load_custom_css():
 
     custom_css = f"""
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Agdasima');
+
         .stApp {{
             {background_css}
             background-size: cover;
             background-repeat: no-repeat;
             background-attachment: fixed;
         }}
+
+        /* --- NEW TITLE STYLING (from Code #1) --- */
         .custom-title-container {{
-            display: flex;
-            justify-content: center;
-            margin-bottom: 20px;
+            text-align: center !important;
+            width: 100% !important;
+            margin-top: 20px !important;
+            margin-bottom: 20px !important;
+        }}
+        .custom-title-box {{
+            display: inline-block !important;
+            background-color: rgba(0, 0, 0, 0.8) !important;
+            padding: 10px 20px !important;
+            border-radius: 5px !important;
         }}
         .custom-title {{
-            background-color: rgba(10, 10, 12, 0.8);
-            padding: 10px 25px;
-            border-radius: 10px;
-            text-align: center;
-            border: 1px solid #00C4FF;
+            font-family: 'Agdasima', sans-serif !important;
+            font-size: 50px !important;
+            color: cyan !important;
+            margin: 0 !important;
         }}
-        .custom-title h1 {{
-            color: #00C4FF;
-            font-size: 1.8em;
-            font-weight: bold;
-            text-shadow: 0 0 6px #00C4FF, 0 0 10px #00C4FF;
-            margin-bottom: 0;
-        }}
+
+        /* --- Existing Chat Styling (from Code #2) --- */
         div[data-testid="stChatMessage"] > div {{
             background-color: rgba(40, 42, 54, 0.85);
             border-radius: 15px;
@@ -355,10 +349,6 @@ def get_llm(
         return None
 
     try:
-        # ───────────
-        # THIS IS THE ONE CHANGE:
-        # Use `model=…` instead of `model_name=…`
-        # ───────────
         llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=temperature,
@@ -410,13 +400,17 @@ st.set_page_config(
 # Apply your custom CSS (dark + cyan glow theme)
 load_custom_css()
 
-# Custom Title – “Lung Cancer AI Assistant”
-st.markdown(
-    "<div class='custom-title-container'><div class='custom-title'>"
-    "<h1>Lung Cancer AI Assistant</h1>"
-    "</div></div>",
-    unsafe_allow_html=True
-)
+# --- NEW TITLE HTML (from Code #1) ---
+st.markdown("""
+    <div class="custom-title-container">
+        <div class="custom-title-box">
+            <p class="custom-title">
+                Lung Cancer AI Assistant
+            </p>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+
 
 # Load FAISS index and LLMs
 faiss_index = load_faiss_artifact_cached()
