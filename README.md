@@ -76,5 +76,7 @@ c. Reranking
 
     Retrieved chunk metadata is displayed in an expander:  
         File name, page number, and content snippet for transparency.
+
+App available online at : https://lung-cancer-ai-chatbot-by-gururaj-h-c.streamlit.app/
          
      
