@@ -94,22 +94,33 @@ def load_custom_css():
     st.markdown(custom_css, unsafe_allow_html=True)
 
 
-# --- MODIFIED NLTK DOWNLOADER ---
-@st.cache_data
-def download_nltk_resources():
+# --- MORE ROBUST NLTK DOWNLOADER ---
+@st.cache_resource
+def setup_nltk():
     """
-    Downloads necessary NLTK data packages directly.
+    Downloads necessary NLTK data packages directly and verbosely.
     The cache ensures this only runs once per container startup.
     """
     try:
-        nltk.download('punkt', quiet=True)
-        nltk.download('stopwords', quiet=True)
-        nltk.download('averaged_perceptron_tagger', quiet=True)
-    except Exception as e:
-        st.error(f"Error downloading NLTK resources: {e}")
+        st.write("--- NLTK Setup ---")
+        st.write("Downloading 'punkt'...")
+        nltk.download('punkt')
+        st.write("'punkt' downloaded.")
 
-# Call the function to ensure resources are available
-download_nltk_resources()
+        st.write("Downloading 'stopwords'...")
+        nltk.download('stopwords')
+        st.write("'stopwords' downloaded.")
+
+        st.write("Downloading 'averaged_perceptron_tagger'...")
+        nltk.download('averaged_perceptron_tagger')
+        st.write("'averaged_perceptron_tagger' downloaded.")
+        st.write("--- NLTK Setup Complete ---")
+    except Exception as e:
+        st.error(f"FATAL: Error downloading NLTK resources: {e}")
+        st.stop()
+
+# Call the function to ensure resources are available at the very start
+setup_nltk()
 
 
 def pos_tag_keyword_extractor(text: str) -> set[str]:
@@ -126,7 +137,6 @@ def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> 
         st.error(f"FAISS index folder not found at {FAISS_INDEX_PATH}.")
         return None
     try:
-        # Use the first available API key for the initial embedding model loading
         embeddings = GoogleGenerativeAIEmbeddings(model=EMB_MODEL, google_api_key=st.session_state.api_keys[0], task_type=EMBEDDING_TASK_TYPE_QUERY)
         return FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=allow_dangerous_deserialization)
     except Exception as e:
@@ -161,7 +171,6 @@ def format_docs_with_sources_st(docs: list[Document]) -> str:
 
 
 def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> ChatGoogleGenerativeAI | None:
-    """Creates a ChatGoogleGenerativeAI instance using a specific API key."""
     try:
         return ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, temperature=temperature, convert_system_message_to_human=True)
     except Exception as e:
@@ -169,10 +178,6 @@ def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> Ch
         return None
 
 def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_payload):
-    """
-    Invokes a LangChain chain, handling API key rotation on rate limit errors.
-    Returns a tuple: (response_text, error_message).
-    """
     start_index = st.session_state.current_api_key_index
     num_keys = len(st.session_state.api_keys)
 
