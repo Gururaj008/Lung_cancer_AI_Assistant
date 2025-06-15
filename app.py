@@ -2,10 +2,7 @@ import streamlit as st
 import os
 import base64
 import time
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from collections import Counter
+# NLTK imports are now removed
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
@@ -51,9 +48,10 @@ FAISS_INDEX_PATH = os.path.join(APP_ROOT_FOLDER, FAISS_INDEX_NAME)
 BACKGROUND_IMAGE_FILENAME = "hospital.png"
 
 EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
-HYBRID_TOP_N_SEMANTIC         = 25
-HYBRID_TOP_N_FOR_LLM          = 5
-HYBRID_KEYWORD_BOOST_FACTOR   = 0.05
+# These constants are no longer used by the simplified search
+# HYBRID_TOP_N_SEMANTIC         = 25
+# HYBRID_KEYWORD_BOOST_FACTOR   = 0.05
+TOP_N_FOR_LLM                 = 5 # We only need one constant now
 CONVERSATION_WINDOW_K         = 5
 # ==============================================================================
 
@@ -93,43 +91,9 @@ def load_custom_css():
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
+# NLTK setup function is now removed.
 
-# --- MORE ROBUST NLTK DOWNLOADER ---
-@st.cache_resource
-def setup_nltk():
-    """
-    Downloads necessary NLTK data packages directly and verbosely.
-    The cache ensures this only runs once per container startup.
-    """
-    try:
-        st.write("--- NLTK Setup ---")
-        st.write("Downloading 'punkt'...")
-        nltk.download('punkt')
-        st.write("'punkt' downloaded.")
-
-        st.write("Downloading 'stopwords'...")
-        nltk.download('stopwords')
-        st.write("'stopwords' downloaded.")
-
-        st.write("Downloading 'averaged_perceptron_tagger'...")
-        nltk.download('averaged_perceptron_tagger')
-        st.write("'averaged_perceptron_tagger' downloaded.")
-        st.write("--- NLTK Setup Complete ---")
-    except Exception as e:
-        st.error(f"FATAL: Error downloading NLTK resources: {e}")
-        st.stop()
-
-# Call the function to ensure resources are available at the very start
-setup_nltk()
-
-
-def pos_tag_keyword_extractor(text: str) -> set[str]:
-    if not text: return set()
-    stop_words = set(stopwords.words('english'))
-    words = word_tokenize(text)
-    tagged_words = nltk.pos_tag(words)
-    return {word.lower() for word, tag in tagged_words if tag in {'NN', 'NNS', 'NNP', 'NNPS', 'JJ'} and word.lower() not in stop_words and word.isalnum()}
-
+# pos_tag_keyword_extractor function is now removed.
 
 @st.cache_resource
 def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> FAISS | None:
@@ -143,21 +107,17 @@ def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> 
         st.error(f"Error loading FAISS index: {e}")
         return None
 
-
-def hybrid_search_with_reranking_st(query_text: str, faiss_index: FAISS) -> list[Document]:
-    if not faiss_index: return []
+# --- MODIFIED: Simplified search function without NLTK ---
+def semantic_search_st(query_text: str, faiss_index: FAISS) -> list[Document]:
+    """Performs a simple semantic search and returns the top N results."""
+    if not faiss_index:
+        return []
     try:
-        semantic_results = faiss_index.similarity_search_with_score(query_text, k=HYBRID_TOP_N_SEMANTIC)
+        # Directly search and return the top N documents. No reranking needed.
+        return faiss_index.similarity_search(query_text, k=TOP_N_FOR_LLM)
     except Exception as e:
-        st.warning(f"Semantic search failed: {e}"); return []
-    query_keywords = pos_tag_keyword_extractor(query_text)
-    reranked_results = []
-    for doc, score in semantic_results:
-        common_keywords = len(query_keywords.intersection(set(doc.metadata.get("keywords", []))))
-        rerank_score = score - (common_keywords * HYBRID_KEYWORD_BOOST_FACTOR)
-        reranked_results.append({"document": doc, "score": rerank_score})
-    reranked_results.sort(key=lambda x: x["score"])
-    return [item["document"] for item in reranked_results[:HYBRID_TOP_N_FOR_LLM]]
+        st.warning(f"Semantic search failed: {e}")
+        return []
 
 
 def format_docs_with_sources_st(docs: list[Document]) -> str:
@@ -276,7 +236,8 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
             ai_response_content = "I apologize, but my expertise is limited to lung cancer. I cannot answer questions on other topics."
         elif intent == "LUNG_CANCER_QUERY":
             with st.spinner("Searching knowledge base and generating response..."):
-                retrieved_docs = hybrid_search_with_reranking_st(user_query, faiss_index)
+                # MODIFIED: Call the new, simpler search function
+                retrieved_docs = semantic_search_st(user_query, faiss_index)
                 if not retrieved_docs:
                     ai_response_content = "I could not find specific information for your query in my knowledge base."
                 else:
