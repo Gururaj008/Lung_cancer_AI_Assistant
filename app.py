@@ -1,117 +1,186 @@
 import streamlit as st
 import os
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage
-from langchain_core.tools import tool
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain.memory import ConversationBufferMemory
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
 import base64
 import time
 
-# --- Configuration ---
-API_KEYS = [
-    st.secrets.get("API_KEY_01"),
-    st.secrets.get("API_KEY_02"),
-    st.secrets.get("API_KEY_03"),
-    st.secrets.get("API_KEY_04"),
-    st.secrets.get("API_KEY_05")
-]
-API_KEYS = [key for key in API_KEYS if key]
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain.memory import ConversationBufferWindowMemory
+from google.api_core.exceptions import ResourceExhausted
 
-MODEL_NAME = st.secrets["MODEL_NAME"]
-BACKGROUND_IMAGE_PATH = "garage.jpeg"
+# --- Page Config must be the first Streamlit command ---
+st.set_page_config(
+    page_title="Lung Cancer AI Assistant",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+API_KEYS = [st.secrets.get(f"API_KEY_0{i}") for i in range(1, 6)]
+API_KEYS = [key for key in API_KEYS if key]
 
 if not API_KEYS:
     st.error("Please provide at least one GOOGLE_API_KEY in st.secrets (e.g., API_KEY_01).")
     st.stop()
 
-# --- Agent and Tool Factory Function ---
-def get_agent_executor_with_key(api_key):
-    os.environ["GOOGLE_API_KEY"] = api_key
+EMB_MODEL = "models/embedding-001"
+RAG_LLM_MODEL_NAME    = "gemini-1.5-flash-latest"
+INTENT_LLM_MODEL_NAME = "gemini-1.5-flash-latest"
+REWRITE_LLM_MODEL_NAME = "gemini-1.5-flash-latest"
+
+APP_ROOT_FOLDER = os.path.dirname(os.path.abspath(__file__))
+FAISS_INDEX_NAME = "my_faiss_index_artifact"
+FAISS_INDEX_PATH = os.path.join(APP_ROOT_FOLDER, FAISS_INDEX_NAME)
+BACKGROUND_IMAGE_FILENAME = "hospital.png" # You can change this to another background if you wish
+
+EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
+TOP_N_FOR_LLM                 = 5
+CONVERSATION_WINDOW_K         = 5
+# ==============================================================================
+
+
+@st.cache_data
+def get_base64_of_bin_file(bin_file):
     try:
-        genai.configure(api_key=api_key)
-        client = genai
-    except Exception as e:
-        st.warning(f"Error configuring Google Generative AI with a key: {e}")
+        with open(bin_file, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except FileNotFoundError:
         return None
 
-    @tool
-    def greet_tool(_input: str = "") -> str:
-        """Use this tool for greetings or conversation initiation."""
-        res = """
-        Welcome to Maverick’s IntelliTune Garage!
-        * I am your AI service assistant.
-        * How can I help with your vehicle today?
-        * Type 'help' for available services or 'exit' to quit.
-        """
-        return res
+# --- THIS FUNCTION NOW CONTAINS THE CSS FROM THE GARAGE APP ---
+def load_custom_css():
+    img_path = os.path.join(APP_ROOT_FOLDER, BACKGROUND_IMAGE_FILENAME)
+    img_base64 = get_base64_of_bin_file(img_path)
+    background_css = f"background-image: url('data:image/png;base64,{img_base64}');" if img_base64 else "background-color: #0a0b0c;"
 
-    @tool
-    def search_engine_problems(query: str) -> str:
-        """Use this tool to analyze engine-related complaints."""
-        llm_tool = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0.1, client=client)
-        prompt_text = f"You are Maverick’s IntelliTune Garage AI. User says: \"{query}\". Respond with 3-5 concise bullet points on possible causes or checks. End with: \"Please contact us to get this fixed or for more info.\""
-        return llm_tool.invoke([HumanMessage(content=prompt_text)]).content.strip()
+    custom_css = f"""
+    <style>
+        .stApp {{
+            {background_css}
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }}
 
-    @tool
-    def schedule_service(query: str) -> str:
-        """Use this tool for scheduling or maintenance interval questions."""
-        llm_tool = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0.1, client=client)
-        prompt_text = f"You are Maverick’s IntelliTune Garage AI. User query: \"{query}\". Respond with 3-5 concise bullet points on recommended maintenance. End with: \"Please contact us to get this fixed or for more info.\""
-        return llm_tool.invoke([HumanMessage(content=prompt_text)]).content.strip()
+        /* --- CHAT MESSAGE STYLING (from Garage App) --- */
+        .stChatMessage {{
+            background-color: rgba(255, 255, 255, 0.88) !important;
+            border-radius: 10px;
+            padding: 12px !important;
+            margin-bottom: 10px;
+            border: 1px solid #cccccc;
+        }}
+        .stChatMessage p, .stChatMessage li, .stChatMessage div[data-testid="stMarkdownContainer"] > div {{
+            color: #1e1e1e !important;
+            font-size: 1rem !important;
+        }}
 
-    @tool
-    def assess_damage(query: str) -> str:
-        """Use this tool for accident damage descriptions."""
-        llm_tool = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0.1, client=client)
-        prompt_text = f"You are Maverick’s IntelliTune Garage AI. User says: \"{query}\". Respond with 3-5 concise bullet points assessing potential damage or advice. End with: \"Please contact us to get this fixed or for more info.\""
-        return llm_tool.invoke([HumanMessage(content=prompt_text)]).content.strip()
-
-    @tool
-    def routine_service(query: str) -> str:
-        """Use this tool for routine service check questions."""
-        llm_tool = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0.1, client=client)
-        prompt_text = f"You are Maverick’s IntelliTune Garage AI. User asks: \"{query}\". Respond with 3-5 concise bullet points on routine checks. End with: \"Please contact us to get this fixed or for more info.\""
-        return llm_tool.invoke([HumanMessage(content=prompt_text)]).content.strip()
-
-    @tool
-    def contact_info(_input: str = "") -> str:
-        """Use this tool when asked for contact details."""
-        address = """
-        *   **Address:** Maverick’s IntelliTune Garage, Hesaraghatta Main Road, Bengaluru
-        *   **Hours:** 10 AM – 6 PM (Weekdays)
-        *   **Phone:** +91 98765 00000
-        *   **Website:** www.intellitune.com
-        *   **Email:** intellitune@tuning.com
-        Please contact us for appointments or further information.
-        """
-        return address
-
-    tools = [greet_tool, search_engine_problems, schedule_service, assess_damage, routine_service, contact_info]
-
-    system_prompt_text = "You are Maverick Agentic AI, a helpful AI service assistant for Maverick’s IntelliTune Garage. You have access to tools. Based on the user's message, decide if a tool is appropriate. If so, use it. If the user says hi, hello, or starts the conversation, use greet_tool. If asked for help, list the types of queries you can handle based on your tools. For goodbyes, respond with a polite closing."
-    agent_prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt_text),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-
-    llm_agent = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0, client=client)
-    agent = create_tool_calling_agent(llm_agent, tools, agent_prompt)
-    
-    if "memory" not in st.session_state:
-        st.session_state.memory = ConversationBufferMemory(memory_key="chat_history", k=20, return_messages=True)
-
-    executor = AgentExecutor(agent=agent, tools=tools, memory=st.session_state.memory, verbose=False, handle_parsing_errors=True)
-    return executor
+        /* --- CHAT INPUT AREA STYLING (from Garage App) --- */
+        .stChatInputContainer {{
+            background-color: rgba(230, 230, 230, 0.90) !important;
+            border-top: 1px solid #bbbbbb !important;
+        }}
+        div[data-testid="stChatInput"] textarea[aria-label="chat input"] {{
+            color: #1e1e1e !important;
+            background-color: rgba(255, 255, 255, 0.95) !important;
+            border-radius: 8px !important;
+            border: 1px solid #aaaaaa !important;
+            padding: 8px 12px !important;
+        }}
+        div[data-testid="stChatInput"] textarea[aria-label="chat input"]::placeholder {{
+            color: #555555 !important;
+            opacity: 1 !important;
+        }}
+    </style>
+    """
+    st.markdown(custom_css, unsafe_allow_html=True)
 
 
-# --- Streamlit UI ---
-st.set_page_config(layout="wide")
+@st.cache_resource
+def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> FAISS | None:
+    if not os.path.exists(FAISS_INDEX_PATH):
+        st.error(f"FAISS index folder not found at {FAISS_INDEX_PATH}.")
+        return None
+    try:
+        embeddings = GoogleGenerativeAIEmbeddings(model=EMB_MODEL, google_api_key=st.session_state.api_keys[0], task_type=EMBEDDING_TASK_TYPE_QUERY)
+        return FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=allow_dangerous_deserialization)
+    except Exception as e:
+        st.error(f"Error loading FAISS index: {e}")
+        return None
+
+
+def semantic_search_st(query_text: str, faiss_index: FAISS) -> list[Document]:
+    if not faiss_index: return []
+    try:
+        return faiss_index.similarity_search(query_text, k=TOP_N_FOR_LLM)
+    except Exception as e:
+        st.warning(f"Semantic search failed: {e}"); return []
+
+
+def format_docs_with_sources_st(docs: list[Document]) -> str:
+    formatted_strings = []
+    for i, doc in enumerate(docs):
+        filename = os.path.basename(doc.metadata.get("source", "N/A"))
+        page = doc.metadata.get("page", "N/A")
+        page_num = page + 1 if isinstance(page, int) else page
+        formatted_strings.append(f"Source {i+1} (File: {filename}, Page: {page_num}):\n{doc.page_content}")
+    return "\n\n".join(formatted_strings)
+
+
+def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> ChatGoogleGenerativeAI | None:
+    try:
+        return ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, temperature=temperature, convert_system_message_to_human=True)
+    except Exception as e:
+        st.warning(f"Failed to create LLM with a key. Error: {e}"); return None
+
+def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_payload):
+    start_index = st.session_state.current_api_key_index
+    num_keys = len(st.session_state.api_keys)
+    for i in range(num_keys):
+        key_index_to_try = (start_index + i) % num_keys
+        current_key = st.session_state.api_keys[key_index_to_try]
+        try:
+            llm = create_llm_with_key(current_key, model_name, temperature)
+            if not llm: continue
+            chain = prompt_template | llm | StrOutputParser()
+            response = chain.invoke(input_payload)
+            st.session_state.current_api_key_index = key_index_to_try
+            return response, None
+        except ResourceExhausted:
+            st.warning(f"API rate limit hit on Key #{key_index_to_try + 1}. Rotating...")
+            time.sleep(1); continue
+        except Exception as e:
+            return None, f"An unexpected error occurred: {e}"
+    return None, "All API keys are currently rate-limited. Please try again in a minute."
+
+
+def rewrite_query_with_history(chat_history, user_query):
+    if not chat_history:
+        return user_query, None
+
+    rewrite_prompt_template = ChatPromptTemplate.from_template(
+        "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question.\n\n"
+        "Chat History:\n{chat_history}\n\n"
+        "Follow Up Input: {question}\n"
+        "Standalone question:"
+    )
+    rewritten_query, error = invoke_chain_with_rotation(
+        rewrite_prompt_template, REWRITE_LLM_MODEL_NAME, 0.1,
+        {"chat_history": chat_history, "question": user_query}
+    )
+    return rewritten_query if not error else user_query, error
+
+
+# --- Main App Logic ---
+load_custom_css()
+
+# --- THIS TITLE MARKDOWN IS NOW FROM THE GARAGE APP ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Agdasima');
@@ -119,178 +188,114 @@ st.markdown("""
     .custom-title-box { display: inline-block !important; background-color: rgba(0, 0, 0, 0.8) !important; padding: 10px 20px !important; border-radius: 5px !important; }
     .custom-title { font-family: 'Agdasima', sans-serif !important; font-size: 50px !important; color: cyan !important; margin: 0 !important; }
     </style>
-    <div class="custom-title-container"><div class="custom-title-box"><p class="custom-title">Agentic AI for Maverick's IntelliTune Garage</p></div></div>
+    <div class="custom-title-container"><div class="custom-title-box"><p class="custom-title">Lung Cancer AI Assistant</p></div></div>
 """, unsafe_allow_html=True)
 
-def set_bg_from_local(image_file):
-    if os.path.exists(image_file):
-        with open(image_file, "rb") as image:
-            encoded_string = base64.b64encode(image.read()).decode()
-        st.markdown(
-            f"""
-            <style>
-            .stApp {{
-                background-image: url(data:image/{"png" if image_file.endswith(".png") else "jpg"};base64,{encoded_string});
-                background-size: cover; background-repeat: no-repeat; background-attachment: fixed;
-            }}
 
-            /* --- NEW CHAT MESSAGE STYLING --- */
-            .stChatMessage {{
-                background-color: rgba(240, 242, 246, 0.95) !important; /* Off-white background */
-                border-radius: 15px;
-                padding: 16px !important;
-                margin-bottom: 12px;
-                border: 1px solid #e0e0e0;
-            }}
-            /* Ensure text inside is dark and readable */
-            .stChatMessage p, .stChatMessage li, .stChatMessage div[data-testid="stMarkdownContainer"] > div {{
-                color: #1e1e1e !important; /* Dark text */
-                font-size: 1rem !important;
-            }}
-
-            /* --- NEW AVATAR STYLING --- */
-            /* Target the container for the assistant (AI) avatar */
-            div[data-testid="chat-avatar-assistant"] div[data-testid="stChatAvatar"] {{
-                background-color: #ffc107; /* Yellow */
-            }}
-            /* Target the SVG icon inside the assistant avatar to make it dark */
-            div[data-testid="chat-avatar-assistant"] div[data-testid="stChatAvatar"] svg {{
-                fill: #1e1e1e; /* Dark icon */
-            }}
-
-            /* Target the container for the user avatar */
-            div[data-testid="chat-avatar-user"] div[data-testid="stChatAvatar"] {{
-                background-color: #ff4b4b; /* Red */
-            }}
-            /* Target the SVG icon inside the user avatar to make it white */
-            div[data-testid="chat-avatar-user"] div[data-testid="stChatAvatar"] svg {{
-                fill: white; /* White icon */
-            }}
-
-            /* --- CHAT INPUT AREA STYLING (Unchanged) --- */
-            .stChatInputContainer {{
-                background-color: rgba(230, 230, 230, 0.90) !important;
-                border-top: 1px solid #bbbbbb !important;
-            }}
-            div[data-testid="stChatInput"] textarea[aria-label="chat input"] {{
-                color: #1e1e1e !important;
-                background-color: rgba(255, 255, 255, 0.95) !important;
-            }}
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.warning(f"Background image '{image_file}' not found. Using default background.")
-
-set_bg_from_local(BACKGROUND_IMAGE_PATH)
-
-# --- Session State Initialization ---
-if "session_active" not in st.session_state:
+if "messages" not in st.session_state:
+    st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI assistant for lung cancer information. How can I help you today?"}]
+if "chat_memory" not in st.session_state:
+    st.session_state.chat_memory = ConversationBufferWindowMemory(k=CONVERSATION_WINDOW_K, memory_key="chat_history", input_key="question", return_messages=True)
+if "api_keys" not in st.session_state:
     st.session_state.api_keys = API_KEYS
     st.session_state.current_api_key_index = 0
-    st.session_state.agent_executor = None
-    st.session_state.messages = []
-    st.session_state.memory = ConversationBufferMemory(memory_key="chat_history", k=20, return_messages=True)
-    st.session_state.session_active = False
 
-def initialize_chat():
-    if not st.session_state.session_active:
-        st.session_state.messages = []
-        st.session_state.memory.clear()
-        
-        current_key = st.session_state.api_keys[st.session_state.current_api_key_index]
-        st.session_state.agent_executor = get_agent_executor_with_key(current_key)
-        
-        if not st.session_state.agent_executor:
-             st.error("Failed to initialize the agent with the first API key. Please check your keys.")
-             st.stop()
-
-        try:
-            with st.spinner("AgenticAI is starting up..."):
-                initial_greeting_response = st.session_state.agent_executor.invoke(
-                    {"input": "User has just started the chat, greet them."})
-            assistant_response = initial_greeting_response.get("output", "Sorry, I couldn't start up correctly.")
-            st.session_state.messages.append({"role": "assistant", "content": assistant_response})
-        except Exception as e:
-            st.error(f"Error during initial greeting from agent: {e}")
-            st.session_state.messages.append(
-                {"role": "assistant", "content": "I seem to be having trouble starting. Please try refreshing."})
-        
-        st.session_state.session_active = True
-        st.rerun()
-
-# --- Main Chat Logic ---
-if not st.session_state.session_active:
-    initialize_chat()
+faiss_index = load_faiss_artifact_cached()
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        if "sources" in message:
+            with st.expander("Sources"):
+                st.markdown(message["sources"])
 
-if prompt := st.chat_input("How can I help with your vehicle today?"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        with st.spinner("AgenticAI is thinking..."):
-            response_content = ""
-            if prompt.lower() in {"exit", "quit"}:
-                response_content = "Goodbye! We look forward to helping you again."
-                st.session_state.session_active = False
-            elif prompt.lower() == "help":
-                response_content = """
-                I can help with:
-                *   Analyzing engine complaints
-                *   Scheduling services or asking about maintenance
-                *   Assessing accident damage
-                *   Answering routine service questions
-                *   Providing our contact information
-                How can I assist you?
-                """
-            else:
-                response = None
-                start_index = st.session_state.current_api_key_index
-                num_keys = len(st.session_state.api_keys)
-
-                for i in range(num_keys):
-                    key_index_to_try = (start_index + i) % num_keys
-                    try:
-                        st.session_state.agent_executor = get_agent_executor_with_key(st.session_state.api_keys[key_index_to_try])
-                        if not st.session_state.agent_executor:
-                            st.warning(f"Skipping an invalid API key at index {key_index_to_try}.")
-                            continue
-
-                        response = st.session_state.agent_executor.invoke({"input": prompt})
-                        st.session_state.current_api_key_index = key_index_to_try
-                        break
-                    except ResourceExhausted:
-                        st.warning(f"API rate limit hit on Key #{key_index_to_try + 1}. Rotating...")
-                        time.sleep(1)
-                        continue
-                    except Exception as e:
-                        st.error(f"An unexpected error occurred: {e}")
-                        response_content = "I'm having some trouble processing that. Please try rephrasing."
-                        break
-
-                if response:
-                    response_content = response.get("output", "Sorry, I didn't quite understand that.")
-                elif not response_content:
-                    st.error("All API keys are currently rate-limited. The system is under heavy load.")
-                    response_content = "I'm currently experiencing very high traffic and can't process your request. Please try again in a minute."
-
-            st.session_state.messages.append({"role": "assistant", "content": response_content})
-            st.markdown(response_content)
-            if not st.session_state.session_active:
-                st.rerun()
-
-# --- Session Reset Buttons ---
-if not st.session_state.session_active:
-    if st.button("Start New Session", key="main_reset_button"):
-        st.session_state.current_api_key_index = 0
-        st.rerun()
-elif st.button("Start New Session", key="manual_reset_button_active_session"):
-    st.session_state.session_active = False
+if st.button("Start New Session"):
+    st.session_state.messages = [{"role": "assistant", "content": "New session started. How can I help you with lung cancer information?"}]
+    st.session_state.chat_memory.clear()
     st.session_state.current_api_key_index = 0
     st.rerun()
+
+if user_query := st.chat_input("Ask a question about lung cancer..."):
+    if not faiss_index:
+        st.error("The knowledge base (FAISS index) failed to load. The assistant cannot continue.")
+    else:
+        st.session_state.messages.append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.markdown(user_query)
+
+        INTENT_LABELS = ["GREETING_SMALLTALK", "LUNG_CANCER_QUERY", "OUT_OF_SCOPE", "EXIT"]
+        intent_prompt = ChatPromptTemplate.from_template(
+            "Your task is to classify the user's intent. Respond with ONLY one of the following labels: "
+            f"{', '.join(INTENT_LABELS)}\nUser input: \"{{user_query}}\"\nClassification:"
+        )
+        classification_result, error = invoke_chain_with_rotation(
+            intent_prompt, INTENT_LLM_MODEL_NAME, 0.1, {"user_query": user_query}
+        )
+        
+        intent = "LUNG_CANCER_QUERY"
+        if error: st.error(f"Intent classification failed: {error}")
+        elif classification_result and classification_result.strip().upper() in INTENT_LABELS:
+            intent = classification_result.strip().upper()
+
+        ai_response_content = ""
+        ai_response_sources = ""
+
+        if intent == "GREETING_SMALLTALK":
+            ai_response_content = "Hello! How can I assist you with information about lung cancer today?"
+        elif intent == "EXIT":
+            ai_response_content = "Thank you for using the assistant. Goodbye!"
+        elif intent == "OUT_OF_SCOPE":
+            ai_response_content = "I apologize, but my expertise is limited to lung cancer. I cannot answer questions on other topics."
+        elif intent == "LUNG_CANCER_QUERY":
+            with st.spinner("Thinking..."):
+                chat_history = st.session_state.chat_memory.load_memory_variables({})['chat_history']
+                
+                standalone_query, error = rewrite_query_with_history(chat_history, user_query)
+                if error: st.warning(f"Query rewriting failed: {error}. Using original query.")
+
+                retrieved_docs = semantic_search_st(standalone_query, faiss_index)
+                if not retrieved_docs:
+                    ai_response_content = "I could not find specific information for your query in my knowledge base."
+                else:
+                    context = format_docs_with_sources_st(retrieved_docs)
+                    
+                    rag_prompt_template_str = (
+                        "You are an expert AI assistant for lung cancer information. Your goal is to synthesize a helpful and accurate answer for the user based *only* on the provided 'Context from Retrieved Documents'.\n\n"
+                        "Instructions:\n"
+                        "1. First, directly address the user's 'Current Question'. Start your response with a clear, direct statement (e.g., 'Yes, according to the provided sources...', 'The documents suggest that...', 'The primary causes listed are...').\n"
+                        "2. After the direct statement, provide a comprehensive answer by synthesizing information from all relevant sources in the context. Do not just copy-paste the sources.\n"
+                        "3. Use bullet points for lists (e.g., symptoms, risk factors) to improve readability.\n"
+                        "4. Do not use any outside knowledge. Your response must be grounded in the provided text.\n"
+                        "5. If the context does not contain information to answer the question, state: 'Based on the provided documents, I cannot find specific information about your question.'\n\n"
+                        "Context from Retrieved Documents:\n{context}\n\n"
+                        "Current Question: {question}\n\n"
+                        "Answer:"
+                    )
+                    rag_prompt = ChatPromptTemplate.from_template(rag_prompt_template_str)
+                    
+                    ai_response_content, error = invoke_chain_with_rotation(
+                        rag_prompt, RAG_LLM_MODEL_NAME, 0.3,
+                        {"context": context, "question": standalone_query}
+                    )
+                    if error:
+                        st.error(f"Response generation failed: {error}")
+                        ai_response_content = "Sorry, I encountered an error while generating the response."
+                    else:
+                        ai_response_sources = context
+
+        st.session_state.chat_memory.save_context({"question": user_query}, {"answer": ai_response_content})
+        
+        response_message = {"role": "assistant", "content": ai_response_content}
+        if ai_response_sources:
+            response_message["sources"] = ai_response_sources
+        st.session_state.messages.append(response_message)
+
+        with st.chat_message("assistant"):
+            st.markdown(ai_response_content)
+            if ai_response_sources:
+                with st.expander("Sources"):
+                    st.markdown(ai_response_sources)
+        
+        if intent == "EXIT":
+            time.sleep(2)
+            st.stop()
