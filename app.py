@@ -2,7 +2,6 @@ import streamlit as st
 import os
 import base64
 import time
-# NLTK imports are now removed
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
@@ -10,7 +9,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain.memory import ConversationBufferWindowMemory
-from google.api_core.exceptions import ResourceExhausted # Import for rate limit handling
+from google.api_core.exceptions import ResourceExhausted
 
 # --- Page Config must be the first Streamlit command ---
 st.set_page_config(
@@ -22,18 +21,9 @@ st.set_page_config(
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-# Load all API keys from secrets into a list
-API_KEYS = [
-    st.secrets.get("API_KEY_01"),
-    st.secrets.get("API_KEY_02"),
-    st.secrets.get("API_KEY_03"),
-    st.secrets.get("API_KEY_04"),
-    st.secrets.get("API_KEY_05")
-]
-# Filter out any keys that are not set (are None or empty strings)
+API_KEYS = [st.secrets.get(f"API_KEY_0{i}") for i in range(1, 6)]
 API_KEYS = [key for key in API_KEYS if key]
 
-# Validate that at least one key is present
 if not API_KEYS:
     st.error("Please provide at least one GOOGLE_API_KEY in st.secrets (e.g., API_KEY_01).")
     st.stop()
@@ -41,6 +31,7 @@ if not API_KEYS:
 EMB_MODEL = "models/embedding-001"
 RAG_LLM_MODEL_NAME    = "gemini-1.5-flash-latest"
 INTENT_LLM_MODEL_NAME = "gemini-1.5-flash-latest"
+REWRITE_LLM_MODEL_NAME = "gemini-1.5-flash-latest" # Added for the rewrite step
 
 APP_ROOT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 FAISS_INDEX_NAME = "my_faiss_index_artifact"
@@ -48,15 +39,11 @@ FAISS_INDEX_PATH = os.path.join(APP_ROOT_FOLDER, FAISS_INDEX_NAME)
 BACKGROUND_IMAGE_FILENAME = "hospital.png"
 
 EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
-# These constants are no longer used by the simplified search
-# HYBRID_TOP_N_SEMANTIC         = 25
-# HYBRID_KEYWORD_BOOST_FACTOR   = 0.05
-TOP_N_FOR_LLM                 = 5 # We only need one constant now
+TOP_N_FOR_LLM                 = 5
 CONVERSATION_WINDOW_K         = 5
 # ==============================================================================
 
 
-# --- Function to load a local image as base64 (for background) ---
 @st.cache_data
 def get_base64_of_bin_file(bin_file):
     try:
@@ -91,9 +78,6 @@ def load_custom_css():
     """
     st.markdown(custom_css, unsafe_allow_html=True)
 
-# NLTK setup function is now removed.
-
-# pos_tag_keyword_extractor function is now removed.
 
 @st.cache_resource
 def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> FAISS | None:
@@ -107,17 +91,13 @@ def load_faiss_artifact_cached(allow_dangerous_deserialization: bool = True) -> 
         st.error(f"Error loading FAISS index: {e}")
         return None
 
-# --- MODIFIED: Simplified search function without NLTK ---
+
 def semantic_search_st(query_text: str, faiss_index: FAISS) -> list[Document]:
-    """Performs a simple semantic search and returns the top N results."""
-    if not faiss_index:
-        return []
+    if not faiss_index: return []
     try:
-        # Directly search and return the top N documents. No reranking needed.
         return faiss_index.similarity_search(query_text, k=TOP_N_FOR_LLM)
     except Exception as e:
-        st.warning(f"Semantic search failed: {e}")
-        return []
+        st.warning(f"Semantic search failed: {e}"); return []
 
 
 def format_docs_with_sources_st(docs: list[Document]) -> str:
@@ -134,39 +114,44 @@ def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> Ch
     try:
         return ChatGoogleGenerativeAI(model=model_name, google_api_key=api_key, temperature=temperature, convert_system_message_to_human=True)
     except Exception as e:
-        st.warning(f"Failed to create LLM with a key. Error: {e}")
-        return None
+        st.warning(f"Failed to create LLM with a key. Error: {e}"); return None
 
 def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_payload):
     start_index = st.session_state.current_api_key_index
     num_keys = len(st.session_state.api_keys)
-
     for i in range(num_keys):
         key_index_to_try = (start_index + i) % num_keys
         current_key = st.session_state.api_keys[key_index_to_try]
-
         try:
             llm = create_llm_with_key(current_key, model_name, temperature)
-            if not llm:
-                st.warning(f"Skipping invalid API key at index {key_index_to_try}.")
-                continue
-
+            if not llm: continue
             chain = prompt_template | llm | StrOutputParser()
             response = chain.invoke(input_payload)
-
             st.session_state.current_api_key_index = key_index_to_try
             return response, None
-
         except ResourceExhausted:
             st.warning(f"API rate limit hit on Key #{key_index_to_try + 1}. Rotating...")
-            time.sleep(1)
-            continue
-
+            time.sleep(1); continue
         except Exception as e:
             return None, f"An unexpected error occurred: {e}"
+    return None, "All API keys are currently rate-limited. Please try again in a minute."
 
-    error_msg = "All API keys are currently rate-limited. The system is under heavy load. Please try again in a minute."
-    return None, error_msg
+
+def rewrite_query_with_history(chat_history, user_query):
+    if not chat_history:
+        return user_query, None # No history, no rewrite needed
+
+    rewrite_prompt_template = ChatPromptTemplate.from_template(
+        "Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question.\n\n"
+        "Chat History:\n{chat_history}\n\n"
+        "Follow Up Input: {question}\n"
+        "Standalone question:"
+    )
+    rewritten_query, error = invoke_chain_with_rotation(
+        rewrite_prompt_template, REWRITE_LLM_MODEL_NAME, 0.1,
+        {"chat_history": chat_history, "question": user_query}
+    )
+    return rewritten_query if not error else user_query, error
 
 
 # --- Main App Logic ---
@@ -178,7 +163,6 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI assistant for lung cancer information. How can I help you today?"}]
 if "chat_memory" not in st.session_state:
@@ -220,8 +204,7 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
         )
         
         intent = "LUNG_CANCER_QUERY"
-        if error:
-            st.error(f"Intent classification failed: {error}")
+        if error: st.error(f"Intent classification failed: {error}")
         elif classification_result and classification_result.strip().upper() in INTENT_LABELS:
             intent = classification_result.strip().upper()
 
@@ -235,24 +218,27 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
         elif intent == "OUT_OF_SCOPE":
             ai_response_content = "I apologize, but my expertise is limited to lung cancer. I cannot answer questions on other topics."
         elif intent == "LUNG_CANCER_QUERY":
-            with st.spinner("Searching knowledge base and generating response..."):
-                # MODIFIED: Call the new, simpler search function
-                retrieved_docs = semantic_search_st(user_query, faiss_index)
+            with st.spinner("Thinking..."):
+                chat_history = st.session_state.chat_memory.load_memory_variables({})['chat_history']
+                
+                standalone_query, error = rewrite_query_with_history(chat_history, user_query)
+                if error: st.warning(f"Query rewriting failed: {error}. Using original query.")
+
+                retrieved_docs = semantic_search_st(standalone_query, faiss_index)
                 if not retrieved_docs:
                     ai_response_content = "I could not find specific information for your query in my knowledge base."
                 else:
                     context = format_docs_with_sources_st(retrieved_docs)
-                    chat_history = st.session_state.chat_memory.load_memory_variables({})['chat_history']
                     
+                    # --- THIS IS THE MODIFIED PROMPT ---
                     rag_prompt_template_str = (
-                        "You are a helpful AI assistant for lung cancer information. Your goal is to answer the user's question based *only* "
-                        "on the provided 'Context from Retrieved Documents' and 'Chat History'.\n"
+                        "You are an expert AI assistant for lung cancer information. Your goal is to synthesize a helpful and accurate answer for the user based *only* on the provided 'Context from Retrieved Documents'.\n\n"
                         "Instructions:\n"
-                        "1. Use bullet points for lists (e.g., symptoms, risk factors).\n"
-                        "2. Use paragraphs for explanations.\n"
-                        "3. If the context does not contain the answer, state: 'I cannot answer your question based on the provided information.'\n"
-                        "4. Do not use outside knowledge.\n\n"
-                        "Chat History:\n{chat_history}\n\n"
+                        "1. First, directly address the user's 'Current Question'. Start your response with a clear, direct statement (e.g., 'Yes, according to the provided sources...', 'The documents suggest that...', 'The primary causes listed are...').\n"
+                        "2. After the direct statement, provide a comprehensive answer by synthesizing information from all relevant sources in the context. Do not just copy-paste the sources.\n"
+                        "3. Use bullet points for lists (e.g., symptoms, risk factors) to improve readability.\n"
+                        "4. Do not use any outside knowledge. Your response must be grounded in the provided text.\n"
+                        "5. If the context does not contain information to answer the question, state: 'Based on the provided documents, I cannot find specific information about your question.'\n\n"
                         "Context from Retrieved Documents:\n{context}\n\n"
                         "Current Question: {question}\n\n"
                         "Answer:"
@@ -261,7 +247,7 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
                     
                     ai_response_content, error = invoke_chain_with_rotation(
                         rag_prompt, RAG_LLM_MODEL_NAME, 0.3,
-                        {"context": context, "question": user_query, "chat_history": chat_history}
+                        {"context": context, "question": standalone_query} # Use the standalone_query here
                     )
                     if error:
                         st.error(f"Response generation failed: {error}")
