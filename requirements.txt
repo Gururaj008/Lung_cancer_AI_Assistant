@@ -5,3 +5,4 @@ langchain-community
 faiss-cpu
 nltk
 langchain-core
+google-generativeai
