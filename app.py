@@ -91,9 +91,9 @@ def load_custom_css():
             background-color: rgba(255, 255, 255, 0.95) !important;
         }}
 
-        /* --- NEW: STYLING FOR THE 'SOURCES' EXPANDER --- */
+        /* --- STYLING FOR THE 'SOURCES' EXPANDER --- */
         div[data-testid="stExpander"] {{
-            background-color: rgba(0, 0, 0, 0.05) !important; /* Slightly darker background */
+            background-color: rgba(0, 0, 0, 0.08) !important; /* Slightly darker background */
             border: 1px solid rgba(0, 0, 0, 0.1) !important;
             border-radius: 8px !important;
             margin-top: 16px !important;
