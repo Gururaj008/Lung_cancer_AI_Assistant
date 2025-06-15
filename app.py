@@ -36,7 +36,7 @@ REWRITE_LLM_MODEL_NAME = "gemini-1.5-flash-latest"
 APP_ROOT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 FAISS_INDEX_NAME = "my_faiss_index_artifact"
 FAISS_INDEX_PATH = os.path.join(APP_ROOT_FOLDER, FAISS_INDEX_NAME)
-BACKGROUND_IMAGE_FILENAME = "hospital.png" # You can change this to another background if you wish
+BACKGROUND_IMAGE_FILENAME = "hospital.png"
 
 EMBEDDING_TASK_TYPE_QUERY = "RETRIEVAL_QUERY"
 TOP_N_FOR_LLM                 = 5
@@ -53,7 +53,7 @@ def get_base64_of_bin_file(bin_file):
     except FileNotFoundError:
         return None
 
-# --- THIS FUNCTION NOW CONTAINS THE CSS FROM THE GARAGE APP ---
+
 def load_custom_css():
     img_path = os.path.join(APP_ROOT_FOLDER, BACKGROUND_IMAGE_FILENAME)
     img_base64 = get_base64_of_bin_file(img_path)
@@ -68,20 +68,20 @@ def load_custom_css():
             background-attachment: fixed;
         }}
 
-        /* --- CHAT MESSAGE STYLING (from Garage App) --- */
+        /* --- CHAT MESSAGE STYLING --- */
         .stChatMessage {{
             background-color: rgba(255, 255, 255, 0.88) !important;
             border-radius: 10px;
-            padding: 12px !important;
+            padding: 16px !important;
             margin-bottom: 10px;
-            border: 1px solid #cccccc;
+            border: 1px solid #e0e0e0;
         }}
         .stChatMessage p, .stChatMessage li, .stChatMessage div[data-testid="stMarkdownContainer"] > div {{
             color: #1e1e1e !important;
             font-size: 1rem !important;
         }}
 
-        /* --- CHAT INPUT AREA STYLING (from Garage App) --- */
+        /* --- CHAT INPUT AREA STYLING --- */
         .stChatInputContainer {{
             background-color: rgba(230, 230, 230, 0.90) !important;
             border-top: 1px solid #bbbbbb !important;
@@ -89,13 +89,24 @@ def load_custom_css():
         div[data-testid="stChatInput"] textarea[aria-label="chat input"] {{
             color: #1e1e1e !important;
             background-color: rgba(255, 255, 255, 0.95) !important;
-            border-radius: 8px !important;
-            border: 1px solid #aaaaaa !important;
-            padding: 8px 12px !important;
         }}
-        div[data-testid="stChatInput"] textarea[aria-label="chat input"]::placeholder {{
-            color: #555555 !important;
-            opacity: 1 !important;
+
+        /* --- NEW: STYLING FOR THE 'SOURCES' EXPANDER --- */
+        div[data-testid="stExpander"] {{
+            background-color: rgba(0, 0, 0, 0.05) !important; /* Slightly darker background */
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            border-radius: 8px !important;
+            margin-top: 16px !important;
+        }}
+        /* Style for the 'Sources' title text */
+        div[data-testid="stExpander"] summary {{
+            color: #444444 !important; /* Darker grey for the title */
+            font-weight: 600 !important;
+        }}
+        /* Style for the content inside the expander */
+        div[data-testid="stExpander"] div[data-testid="stMarkdownContainer"] p {{
+            font-size: 0.9rem !important;
+            color: #333333 !important;
         }}
     </style>
     """
@@ -180,7 +191,6 @@ def rewrite_query_with_history(chat_history, user_query):
 # --- Main App Logic ---
 load_custom_css()
 
-# --- THIS TITLE MARKDOWN IS NOW FROM THE GARAGE APP ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Agdasima');
