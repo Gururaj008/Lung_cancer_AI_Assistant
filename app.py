@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# CONFIGURATION (MODIFIED FOR KEY ROTATION)
+# CONFIGURATION
 # ==============================================================================
 # Load all API keys from secrets into a list
 API_KEYS = [
@@ -94,16 +94,22 @@ def load_custom_css():
     st.markdown(custom_css, unsafe_allow_html=True)
 
 
+# --- MODIFIED NLTK DOWNLOADER ---
 @st.cache_data
-def download_nltk_resources_if_needed():
-    resources = ['punkt', 'stopwords', 'averaged_perceptron_tagger']
-    for resource in resources:
-        try:
-            nltk.data.find(f'tokenizers/{resource}')
-        except LookupError:
-            nltk.download(resource, quiet=True)
+def download_nltk_resources():
+    """
+    Downloads necessary NLTK data packages directly.
+    The cache ensures this only runs once per container startup.
+    """
+    try:
+        nltk.download('punkt', quiet=True)
+        nltk.download('stopwords', quiet=True)
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+    except Exception as e:
+        st.error(f"Error downloading NLTK resources: {e}")
 
-download_nltk_resources_if_needed()
+# Call the function to ensure resources are available
+download_nltk_resources()
 
 
 def pos_tag_keyword_extractor(text: str) -> set[str]:
@@ -154,7 +160,6 @@ def format_docs_with_sources_st(docs: list[Document]) -> str:
     return "\n\n".join(formatted_strings)
 
 
-# --- NEW: Function to create an LLM instance with a specific key ---
 def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> ChatGoogleGenerativeAI | None:
     """Creates a ChatGoogleGenerativeAI instance using a specific API key."""
     try:
@@ -163,7 +168,6 @@ def create_llm_with_key(api_key: str, model_name: str, temperature: float) -> Ch
         st.warning(f"Failed to create LLM with a key. Error: {e}")
         return None
 
-# --- NEW: Core function for invoking a chain with key rotation logic ---
 def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_payload):
     """
     Invokes a LangChain chain, handling API key rotation on rate limit errors.
@@ -177,7 +181,6 @@ def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_p
         current_key = st.session_state.api_keys[key_index_to_try]
 
         try:
-            # Create LLM and chain on-the-fly for each attempt
             llm = create_llm_with_key(current_key, model_name, temperature)
             if not llm:
                 st.warning(f"Skipping invalid API key at index {key_index_to_try}.")
@@ -186,20 +189,17 @@ def invoke_chain_with_rotation(prompt_template, model_name, temperature, input_p
             chain = prompt_template | llm | StrOutputParser()
             response = chain.invoke(input_payload)
 
-            # Success! Update the current key index and return the response
             st.session_state.current_api_key_index = key_index_to_try
             return response, None
 
         except ResourceExhausted:
             st.warning(f"API rate limit hit on Key #{key_index_to_try + 1}. Rotating...")
-            time.sleep(1) # Small delay before trying the next key
-            continue # The loop will automatically continue to the next key
+            time.sleep(1)
+            continue
 
         except Exception as e:
-            # For other unexpected errors, stop and report
             return None, f"An unexpected error occurred: {e}"
 
-    # If the loop completes without success, all keys are exhausted
     error_msg = "All API keys are currently rate-limited. The system is under heavy load. Please try again in a minute."
     return None, error_msg
 
@@ -218,15 +218,12 @@ if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Hello! I am your AI assistant for lung cancer information. How can I help you today?"}]
 if "chat_memory" not in st.session_state:
     st.session_state.chat_memory = ConversationBufferWindowMemory(k=CONVERSATION_WINDOW_K, memory_key="chat_history", input_key="question", return_messages=True)
-# NEW: Initialize state for API key management
 if "api_keys" not in st.session_state:
     st.session_state.api_keys = API_KEYS
     st.session_state.current_api_key_index = 0
 
-# Load resources after state is initialized
 faiss_index = load_faiss_artifact_cached()
 
-# Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -237,7 +234,7 @@ for message in st.session_state.messages:
 if st.button("Start New Session"):
     st.session_state.messages = [{"role": "assistant", "content": "New session started. How can I help you with lung cancer information?"}]
     st.session_state.chat_memory.clear()
-    st.session_state.current_api_key_index = 0 # Reset key index on new session
+    st.session_state.current_api_key_index = 0
     st.rerun()
 
 if user_query := st.chat_input("Ask a question about lung cancer..."):
@@ -248,7 +245,6 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
         with st.chat_message("user"):
             st.markdown(user_query)
 
-        # --- Intent Classification (using the new rotation logic) ---
         INTENT_LABELS = ["GREETING_SMALLTALK", "LUNG_CANCER_QUERY", "OUT_OF_SCOPE", "EXIT"]
         intent_prompt = ChatPromptTemplate.from_template(
             "Your task is to classify the user's intent. Respond with ONLY one of the following labels: "
@@ -258,7 +254,7 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
             intent_prompt, INTENT_LLM_MODEL_NAME, 0.1, {"user_query": user_query}
         )
         
-        intent = "LUNG_CANCER_QUERY" # Default intent
+        intent = "LUNG_CANCER_QUERY"
         if error:
             st.error(f"Intent classification failed: {error}")
         elif classification_result and classification_result.strip().upper() in INTENT_LABELS:
@@ -297,7 +293,6 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
                     )
                     rag_prompt = ChatPromptTemplate.from_template(rag_prompt_template_str)
                     
-                    # --- RAG Response Generation (using the new rotation logic) ---
                     ai_response_content, error = invoke_chain_with_rotation(
                         rag_prompt, RAG_LLM_MODEL_NAME, 0.3,
                         {"context": context, "question": user_query, "chat_history": chat_history}
@@ -308,7 +303,6 @@ if user_query := st.chat_input("Ask a question about lung cancer..."):
                     else:
                         ai_response_sources = context
 
-        # Save context and display response
         st.session_state.chat_memory.save_context({"question": user_query}, {"answer": ai_response_content})
         
         response_message = {"role": "assistant", "content": ai_response_content}
